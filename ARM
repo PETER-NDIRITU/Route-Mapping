@@ -1,0 +1,151 @@
+import streamlit as st
+import geopandas as gpd
+import folium
+from streamlit_folium import folium_static
+import requests
+from datetime import datetime
+from geopy.distance import geodesic
+from shapely.geometry import LineString
+# Load airport shapefiles
+def load_airport_shapefiles():
+    return gpd.read_file("C:/Users/thuku/OneDrive/Documents/GeoSpatial Developments/PyCharm/Airport Mapper/AirportMappper/Data/hotosm_ken_airports_points_shp/hotosm_ken_airports_points_shp.shp")
+
+# Filter airports by name
+def filter_airports_by_name(airports, query):
+    return airports[airports['name'].str.contains(query, case=False)]
+
+# Create Folium map with air routes
+def create_folium_map(origin, destination, airports):
+    origin_point = airports[airports['name'] == origin].geometry.centroid.iloc[0].coords[:]
+    destination_point = airports[airports['name'] == destination].geometry.centroid.iloc[0].coords[:]
+
+    m = folium.Map(location=[(origin_point[0][1] + destination_point[0][1]) / 2,
+                             (origin_point[0][0] + destination_point[0][0]) / 2], zoom_start=6)
+
+    folium.Marker(location=[origin_point[0][1], origin_point[0][0]], popup=origin, icon=folium.Icon(color='blue')).add_to(m)
+    folium.Marker(location=[destination_point[0][1], destination_point[0][0]], popup=destination, icon=folium.Icon(color='red')).add_to(m)
+
+    folium.plugins.AntPath([origin_point[0][::-1], destination_point[0][::-1]], color='green').add_to(m)
+
+    return m
+
+# Get weather information using latitude and longitude
+def get_weather_info(latitude, longitude):
+    api_key = "a21ed0c6351db5b8bbefcad88a0cbd28"
+    url = f"https://api.openweathermap.org/data/3.0/onecall?lat={latitude}&lon={longitude}&appid={api_key}"
+
+    response = requests.get(url)
+    data = response.json()
+
+    if 'current' in data:
+        current_weather = data['current']
+        return {
+            'Temperature': current_weather['temp'],
+            'Weather': current_weather['weather'][0]['description'],
+            'Wind Speed': current_weather['wind_speed'],
+            'Visibility': current_weather.get('visibility', 0) / 1000
+        }
+    else:
+        return None
+def get_flight_status(origin, destination):
+    api_key = ""
+    url = f"https://api.flightstats.com/flex/flightstatus/rest/v2/json/route/status/{origin}/{destination}/arr/{datetime.now().strftime('%Y/%m/%d')}"
+    headers = {
+       'appId': '7f945f90',
+        'appKey': '67e71026af6b8a30308b53ba6c3a33cc'
+    }
+    response = requests.get(url, headers=headers)
+    data = response.json()
+
+    if 'flightStatuses' in data:
+        flight_status = {
+            'Departure Time': data['flightStatuses'][0]['departureDate']['dateLocal'],
+            'Arrival Time': data['flightStatuses'][0]['arrivalDate']['dateLocal'],
+            'Status': data['flightStatuses'][0]['status'],
+            'Delay': data['flightStatuses'][0].get('delays', {}).get('departureGateDelayMinutes', 0) # Example delay type
+        }
+        return flight_status
+    else:
+        return None
+
+def calculate_distance(origin_lat, origin_lon, destination_lat, destibation_lon):
+    origin_coords = (origin_lat, origin_lon)
+    destination_coords = (destination_lat, destibation_lon)
+    try :
+        distance = geodesic(origin_coords, destination_coords).kilometers
+        return distance
+    except Exception as e:
+        st.error(f"Error in calculating distance:{e}")
+        return None
+
+
+# Main function
+def main():
+    st.title("Kenyan Air Routes Mapper")
+
+    # Load shapefiles data
+    airports = load_airport_shapefiles()
+
+    # Sidebar to select origin & destination airports
+    st.sidebar.title("Select Airports")
+    origin = st.sidebar.selectbox("Origin Airport", airports['name'].values)
+    destination = st.sidebar.selectbox("Destination Airport", airports['name'].values)
+
+    # Filter airports by name
+    filtered_airports = filter_airports_by_name(airports, origin)
+    st.sidebar.write(filtered_airports)
+
+    # Create Folium map with air routes
+    folium_map = create_folium_map(origin, destination, airports)
+    folium_static(folium_map)
+
+    # Get latitude and longitude for origin and destination
+    origin_lat = filtered_airports.iloc[0]['geometry'].y
+    origin_lon = filtered_airports.iloc[0]['geometry'].x
+    destination_lat = airports[airports['name'] == destination].geometry.centroid.iloc[0].y
+    destination_lon = airports[airports['name'] == destination].geometry.centroid.iloc[0].x
+
+    # Display weather information for origin and destination airports
+    st.write("### Weather Information")
+    origin_weather_info = get_weather_info(origin_lat, origin_lon)
+    destination_weather_info = get_weather_info(destination_lat, destination_lon)
+
+    if origin_weather_info:
+        st.write(f"**Origin Airport ({origin}):**")
+        st.write(f"Temperature: {origin_weather_info['Temperature']}°C")
+        st.write(f"Weather: {origin_weather_info['Weather']}")
+        st.write(f"Wind Speed: {origin_weather_info['Wind Speed']} m/s")
+        st.write(f"Visibility: {origin_weather_info['Visibility']} km")
+    else:
+        st.write("Weather information is not available for the origin airport")
+
+    if destination_weather_info:
+        st.write(f"**Destination Airport ({destination}):**")
+        st.write(f"Temperature: {destination_weather_info['Temperature']}°C")
+        st.write(f"Weather: {destination_weather_info['Weather']}")
+        st.write(f"Wind Speed: {destination_weather_info['Wind Speed']} m/s")
+        st.write(f"Visibility: {destination_weather_info['Visibility']} km")
+    else:
+        st.write("Weather information is not available for the destination airport")
+
+    st.write("### Flight Status")
+    flight_status = get_flight_status(origin, destination)
+    if flight_status:
+        st.write(f"Departure Time: {flight_status['Departure Time']}")
+        st.write(f"Arrival Time:{flight_status['Arrival Time']}")
+        st.write(f"Status: {flight_status['Status']}")
+        st.write(f"Delay (departure gate): {flight_status['Delay']} minutes")
+
+    else:
+        st.write("Flight status information is not available.")
+
+
+    st.write("### Distance and Directions")
+    distance = calculate_distance(origin_lat, origin_lon, destination_lat, destination_lon)
+    if distance:
+        st.write(f"Distance between {origin} and {destination}: {distance:.2f} kilometers")
+
+    else:
+        st.warning("Distance Calculation failed")
+if __name__ == '__main__':
+    main()
